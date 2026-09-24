@@ -1,0 +1,7 @@
+# Used when building with the repo root as context (orders, shipping).
+**/bin/
+**/obj/
+**/node_modules/
+frontend/dist/
+frontend/.angular/
+.git/

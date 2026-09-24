@@ -11,6 +11,7 @@ using OpenTelemetry.Trace;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using Scalar.AspNetCore;
+using Shop.Contracts;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -139,8 +140,13 @@ app.MapPost("/orders", async (
     // --- OUTBOX: persist the order AND the event in ONE transaction. ---
     // We do NOT publish to RabbitMQ here; the OutboxDispatcher does that from
     // the committed row, so the event and the order can never disagree.
+    // Publish the shared OrderPlaced CONTRACT (not the EF entity) so the wire
+    // format is decoupled from how Orders happens to store the row.
+    var orderPlaced = new OrderPlaced(
+        order.Id, order.ProductId, order.ProductName, order.UnitPrice,
+        order.Quantity, order.Total, order.PlacedAt);
     db.Orders.Add(order);
-    db.Outbox.Add(OutboxMessage.Create("order-placed", order));
+    db.Outbox.Add(OutboxMessage.Create("order-placed", orderPlaced));
     await db.SaveChangesAsync();
 
     OrderMetrics.Placed.Add(1);
@@ -357,8 +363,6 @@ public class OrderShippedConsumer(
         await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 }
-
-public record OrderShipped(Guid OrderId);
 
 // Health check that verifies the message broker is reachable.
 public class RabbitMqHealthCheck(IConfiguration config) : IHealthCheck

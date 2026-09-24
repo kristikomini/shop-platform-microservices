@@ -6,6 +6,7 @@ using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using Shop.Contracts;
 
 // A minimal web host so the worker can also expose a Prometheus /metrics
 // endpoint (there is no other HTTP surface — the work is all event-driven).
@@ -115,14 +116,3 @@ public class ShippingWorker(IConfiguration config, ILogger<ShippingWorker> logge
         await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 }
-
-public record OrderPlaced(
-    Guid Id,
-    int ProductId,
-    string ProductName,
-    decimal UnitPrice,
-    int Quantity,
-    decimal Total,
-    DateTime PlacedAt);
-
-public record OrderShipped(Guid OrderId);

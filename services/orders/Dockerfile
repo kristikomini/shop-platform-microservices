@@ -1,10 +1,14 @@
+# Build context is the REPO ROOT (see docker-compose.yml) so the shared
+# Shop.Contracts project is available to reference.
 # --- build stage ---
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
-COPY Orders.csproj .
-RUN dotnet restore
-COPY . .
-RUN dotnet publish -c Release -o /app
+COPY shared/Shop.Contracts/Shop.Contracts.csproj shared/Shop.Contracts/
+COPY services/orders/Orders.csproj services/orders/
+RUN dotnet restore services/orders/Orders.csproj
+COPY shared/ shared/
+COPY services/orders/ services/orders/
+RUN dotnet publish services/orders/Orders.csproj -c Release -o /app
 
 # --- runtime stage ---
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
