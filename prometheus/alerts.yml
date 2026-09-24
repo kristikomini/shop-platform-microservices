@@ -1,0 +1,42 @@
+groups:
+  - name: shop-platform
+    rules:
+      # Any scrape target unreachable for over a minute.
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "Prometheus could not scrape {{ $labels.job }} for over 1 minute."
+
+      # Sustained order rejections (insufficient stock / bad requests).
+      - alert: HighOrderRejectionRate
+        expr: sum(rate(orders_rejected_total[1m])) > 0.5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High order rejection rate"
+          description: "Orders are being rejected at {{ $value | printf \"%.2f\" }}/s for over a minute."
+
+      # Any 5xx responses from a service.
+      - alert: HighServerErrorRate
+        expr: sum by (job) (rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Server errors on {{ $labels.job }}"
+          description: "{{ $labels.job }} is returning 5xx responses."
+
+      # p95 request latency above 500ms.
+      - alert: HighP95Latency
+        expr: histogram_quantile(0.95, sum by (le, job) (rate(http_server_request_duration_seconds_bucket[5m]))) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p95 latency on {{ $labels.job }}"
+          description: "p95 latency is {{ $value | printf \"%.3f\" }}s (>500ms) for 2 minutes."

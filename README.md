@@ -138,6 +138,9 @@ Beyond "it runs", the repo shows the patterns a reviewer looks for:
   counters**: `orders_placed`, `orders_rejected{reason}`, `shipments_completed`).
   Prometheus scrapes them; a Grafana dashboard is **auto-provisioned** (datasource
   + dashboard JSON in the repo) so it works on first `up` with no manual setup.
+  Prometheus also loads **alerting rules** (`prometheus/alerts.yml`): service down,
+  high order-rejection rate, 5xx errors, and high p95 latency — visible in the
+  Prometheus **Alerts** tab (http://localhost:9090/alerts).
 - **Shared event contracts** — the `order-placed` / `order-shipped` message
   schemas live in a `Shop.Contracts` library referenced by both Orders and
   Shipping, so the wire format has a single source of truth and is **decoupled
