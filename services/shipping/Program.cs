@@ -43,6 +43,9 @@ public class ShippingWorker(IConfiguration config, ILogger<ShippingWorker> logge
         var channel = await conn.CreateChannelAsync(cancellationToken: stoppingToken);
         await channel.QueueDeclareAsync("order-placed", durable: true, exclusive: false, autoDelete: false,
             cancellationToken: stoppingToken);
+        // We also PUBLISH to this queue once a shipment is prepared.
+        await channel.QueueDeclareAsync("order-shipped", durable: true, exclusive: false, autoDelete: false,
+            cancellationToken: stoppingToken);
 
         var consumer = new AsyncEventingBasicConsumer(channel);
         consumer.ReceivedAsync += async (_, ea) =>
@@ -51,15 +54,27 @@ public class ShippingWorker(IConfiguration config, ILogger<ShippingWorker> logge
             try
             {
                 var order = JsonSerializer.Deserialize<OrderPlaced>(json);
+                if (order is null) return;
+
                 logger.LogInformation(
                     "📦 Preparing shipment for order {OrderId}: {Qty} x {Product} (total {Total:C})",
-                    order?.Id, order?.Quantity, order?.ProductName, order?.Total);
+                    order.Id, order.Quantity, order.ProductName, order.Total);
+
+                // Simulate the physical work of preparing the parcel...
+                await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
+
+                // ...then announce it shipped so Orders can advance the status.
+                var shipped = Encoding.UTF8.GetBytes(
+                    JsonSerializer.Serialize(new OrderShipped(order.Id)));
+                await channel.BasicPublishAsync(exchange: "", routingKey: "order-shipped",
+                    body: shipped, cancellationToken: stoppingToken);
+
+                logger.LogInformation("🚚 Order {OrderId} shipped.", order.Id);
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Failed to process order-placed event: {Json}", json);
             }
-            await Task.CompletedTask;
         };
 
         await channel.BasicConsumeAsync("order-placed", autoAck: true, consumer: consumer,
@@ -79,3 +94,5 @@ public record OrderPlaced(
     int Quantity,
     decimal Total,
     DateTime PlacedAt);
+
+public record OrderShipped(Guid OrderId);

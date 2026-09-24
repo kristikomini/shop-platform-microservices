@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { Product, Order, CreateOrder } from './models';
+import { Product, Order, CreateOrder, NewProduct } from './models';
 
 // Every call is a RELATIVE URL. In production the Angular app is served BY the
 // gateway, so "/catalog/..." and "/orders/..." hit the gateway on the same
@@ -10,9 +10,17 @@ import { Product, Order, CreateOrder } from './models';
 export class ApiService {
   private http = inject(HttpClient);
 
+  // -> gateway -> Catalog service (optional server-side name search)
+  getProducts(search?: string): Observable<Product[]> {
+    const url = search && search.trim()
+      ? `/catalog/products?search=${encodeURIComponent(search.trim())}`
+      : '/catalog/products';
+    return this.http.get<Product[]>(url);
+  }
+
   // -> gateway -> Catalog service
-  getProducts(): Observable<Product[]> {
-    return this.http.get<Product[]>('/catalog/products');
+  addProduct(product: NewProduct): Observable<Product> {
+    return this.http.post<Product>('/catalog/products', product);
   }
 
   // -> gateway -> Orders service

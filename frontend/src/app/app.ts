@@ -1,16 +1,19 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, OnDestroy, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
+import { HttpErrorResponse } from '@angular/common/http';
 import { ApiService } from './api.service';
 import { Product, Order } from './models';
 
 @Component({
   selector: 'app-root',
-  imports: [CommonModule],
+  imports: [CommonModule, FormsModule],
   templateUrl: './app.html',
   styleUrl: './app.css'
 })
-export class App implements OnInit {
+export class App implements OnInit, OnDestroy {
   private api = inject(ApiService);
+  private pollHandle?: ReturnType<typeof setInterval>;
 
   products = signal<Product[]>([]);
   orders = signal<Order[]>([]);
@@ -20,18 +23,30 @@ export class App implements OnInit {
   placing = signal<number | null>(null);
   toast = signal<{ text: string; ok: boolean } | null>(null);
 
+  search = signal('');
+  creating = signal(false);
+  npName = signal('');
+  npPrice = signal<number | null>(null);
+  npStock = signal<number | null>(null);
+
   ngOnInit(): void {
     this.loadProducts();
     this.loadOrders();
+    // Poll orders so status transitions (Placed -> Shipped) appear live.
+    this.pollHandle = setInterval(() => this.loadOrders(true), 3000);
+  }
+
+  ngOnDestroy(): void {
+    if (this.pollHandle) clearInterval(this.pollHandle);
   }
 
   loadProducts(): void {
     this.loadingProducts.set(true);
-    this.api.getProducts().subscribe({
+    this.api.getProducts(this.search()).subscribe({
       next: (p) => {
         this.products.set(p);
-        const q: Record<number, number> = {};
-        p.forEach((x) => (q[x.id] = 1));
+        const q: Record<number, number> = { ...this.qty() };
+        p.forEach((x) => (q[x.id] ??= 1));
         this.qty.set(q);
         this.loadingProducts.set(false);
       },
@@ -42,18 +57,24 @@ export class App implements OnInit {
     });
   }
 
-  loadOrders(): void {
-    this.loadingOrders.set(true);
+  // `silent` is used by the poller so it doesn't flash a spinner every 3s.
+  loadOrders(silent = false): void {
+    if (!silent) this.loadingOrders.set(true);
     this.api.getOrders().subscribe({
       next: (o) => {
         this.orders.set(o);
         this.loadingOrders.set(false);
       },
       error: () => {
-        this.showToast('Could not reach the Orders service', false);
+        if (!silent) this.showToast('Could not reach the Orders service', false);
         this.loadingOrders.set(false);
       }
     });
+  }
+
+  onSearch(term: string): void {
+    this.search.set(term);
+    this.loadProducts();
   }
 
   setQty(id: number, value: string): void {
@@ -69,10 +90,38 @@ export class App implements OnInit {
         this.showToast(`Ordered ${o.quantity} × ${o.productName} — shipment queued`, true);
         this.placing.set(null);
         this.loadOrders();
+        this.loadProducts(); // reflect the decremented stock
+      },
+      error: (err: HttpErrorResponse) => {
+        const msg = typeof err.error === 'string' && err.error ? err.error : 'Order failed';
+        this.showToast(msg, false);
+        this.placing.set(null);
+        this.loadProducts(); // stock may have changed elsewhere
+      }
+    });
+  }
+
+  addProduct(): void {
+    const name = this.npName().trim();
+    const price = this.npPrice();
+    const stock = this.npStock();
+    if (!name || price === null || price < 0 || stock === null || stock < 0) {
+      this.showToast('Fill in name, price and stock', false);
+      return;
+    }
+    this.creating.set(true);
+    this.api.addProduct({ name, price, stock }).subscribe({
+      next: (p) => {
+        this.showToast(`Added ${p.name}`, true);
+        this.npName.set('');
+        this.npPrice.set(null);
+        this.npStock.set(null);
+        this.creating.set(false);
+        this.loadProducts();
       },
       error: () => {
-        this.showToast('Order failed', false);
-        this.placing.set(null);
+        this.showToast('Could not add product', false);
+        this.creating.set(false);
       }
     });
   }

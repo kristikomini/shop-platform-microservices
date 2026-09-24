@@ -76,4 +76,49 @@ public class CatalogApiTests(CatalogFixture fixture) : IClassFixture<CatalogFixt
         Assert.Equal("HD Webcam", fetched!.Name);
         Assert.Equal(59.00m, fetched.Price);
     }
+
+    [Fact]
+    public async Task Reserve_decrements_stock_when_available()
+    {
+        var created = await (await _client.PostAsJsonAsync("/products",
+            new { name = "Reserve OK Widget", price = 5.00m, stock = 10 }))
+            .Content.ReadFromJsonAsync<Product>();
+
+        var reserve = await _client.PostAsJsonAsync($"/products/{created!.Id}/reserve",
+            new { quantity = 3 });
+
+        Assert.Equal(HttpStatusCode.OK, reserve.StatusCode);
+        var updated = await reserve.Content.ReadFromJsonAsync<Product>();
+        Assert.Equal(7, updated!.Stock);
+    }
+
+    [Fact]
+    public async Task Reserve_rejects_and_leaves_stock_untouched_when_insufficient()
+    {
+        var created = await (await _client.PostAsJsonAsync("/products",
+            new { name = "Low Stock Widget", price = 5.00m, stock = 2 }))
+            .Content.ReadFromJsonAsync<Product>();
+
+        var reserve = await _client.PostAsJsonAsync($"/products/{created!.Id}/reserve",
+            new { quantity = 5 });
+
+        Assert.Equal(HttpStatusCode.Conflict, reserve.StatusCode);
+
+        var after = await _client.GetFromJsonAsync<Product>($"/products/{created.Id}");
+        Assert.Equal(2, after!.Stock); // unchanged
+    }
+
+    [Fact]
+    public async Task Search_filters_products_by_name()
+    {
+        await _client.PostAsJsonAsync("/products",
+            new { name = "Zebra Print Mousepad", price = 9.00m, stock = 5 });
+
+        var results = await _client.GetFromJsonAsync<List<Product>>("/products?search=zebra");
+
+        Assert.NotNull(results);
+        Assert.All(results!, p =>
+            Assert.Contains("zebra", p.Name, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(results!, p => p.Name == "Zebra Print Mousepad");
+    }
 }

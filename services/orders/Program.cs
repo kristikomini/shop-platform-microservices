@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,6 +20,11 @@ builder.Services.AddHttpClient("catalog", c =>
     .AddStandardResilienceHandler();
 
 builder.Services.AddSingleton<EventBus>();
+
+// Orders is also a CONSUMER: it listens for "order-shipped" events from the
+// Shipping service and updates the order's status. So the lifecycle is driven
+// by events, not by Orders polling anyone.
+builder.Services.AddHostedService<OrderShippedConsumer>();
 
 // OpenAPI + health checks (database reachable AND broker reachable).
 builder.Services.AddOpenApi();
@@ -48,13 +54,21 @@ app.MapPost("/orders", async (
     if (cmd.Quantity < 1)
         return Results.BadRequest("Quantity must be at least 1.");
 
-    // --- SYNCHRONOUS communication: verify the product with Catalog ---
+    // --- SYNCHRONOUS communication: ask Catalog to RESERVE stock ---
+    // Catalog owns stock, so Orders asks it to atomically decrement. A 409 means
+    // there wasn't enough — the order is rejected before anything is persisted.
     var catalog = http.CreateClient("catalog");
-    var response = await catalog.GetAsync($"/products/{cmd.ProductId}");
-    if (!response.IsSuccessStatusCode)
-        return Results.BadRequest($"Unknown product {cmd.ProductId}");
+    var reserve = await catalog.PostAsJsonAsync(
+        $"/products/{cmd.ProductId}/reserve", new { quantity = cmd.Quantity });
 
-    var product = await response.Content.ReadFromJsonAsync<ProductDto>();
+    if (reserve.StatusCode == System.Net.HttpStatusCode.Conflict)
+        return Results.BadRequest($"Insufficient stock for product {cmd.ProductId}.");
+    if (reserve.StatusCode == System.Net.HttpStatusCode.NotFound)
+        return Results.BadRequest($"Unknown product {cmd.ProductId}.");
+    if (!reserve.IsSuccessStatusCode)
+        return Results.BadRequest("Could not reserve stock.");
+
+    var product = await reserve.Content.ReadFromJsonAsync<ProductDto>();
     if (product is null)
         return Results.BadRequest("Invalid product response");
 
@@ -86,6 +100,7 @@ public class Order
     public int Quantity { get; set; }
     public decimal Total => UnitPrice * Quantity;
     public DateTime PlacedAt { get; set; }
+    public string Status { get; set; } = "Placed";
 }
 
 public class OrdersDb(DbContextOptions<OrdersDb> options) : DbContext(options)
@@ -114,6 +129,77 @@ public class EventBus(IConfiguration config, ILogger<EventBus> logger)
         logger.LogInformation("Published event to queue '{Queue}'.", queue);
     }
 }
+
+// Background consumer: listens for "order-shipped" and advances the order's
+// status to "Shipped". Uses a DI scope per message to resolve the DbContext.
+public class OrderShippedConsumer(
+    IServiceProvider services,
+    IConfiguration config,
+    ILogger<OrderShippedConsumer> logger) : BackgroundService
+{
+    private readonly string _host = config["RabbitMq:Host"] ?? "rabbitmq";
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        IConnection? conn = null;
+        for (var attempt = 1; attempt <= 15 && !stoppingToken.IsCancellationRequested; attempt++)
+        {
+            try
+            {
+                var factory = new ConnectionFactory { HostName = _host };
+                conn = await factory.CreateConnectionAsync(stoppingToken);
+                break;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning("RabbitMQ not ready (attempt {Attempt}/15): {Message}", attempt, ex.Message);
+                await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken);
+            }
+        }
+        if (conn is null)
+        {
+            logger.LogError("Could not connect to RabbitMQ. Order-shipped consumer stopping.");
+            return;
+        }
+
+        var channel = await conn.CreateChannelAsync(cancellationToken: stoppingToken);
+        await channel.QueueDeclareAsync("order-shipped", durable: true, exclusive: false, autoDelete: false,
+            cancellationToken: stoppingToken);
+
+        var consumer = new AsyncEventingBasicConsumer(channel);
+        consumer.ReceivedAsync += async (_, ea) =>
+        {
+            var json = Encoding.UTF8.GetString(ea.Body.ToArray());
+            try
+            {
+                var evt = JsonSerializer.Deserialize<OrderShipped>(json);
+                if (evt is not null)
+                {
+                    using var scope = services.CreateScope();
+                    var db = scope.ServiceProvider.GetRequiredService<OrdersDb>();
+                    var order = await db.Orders.FindAsync(evt.OrderId);
+                    if (order is not null)
+                    {
+                        order.Status = "Shipped";
+                        await db.SaveChangesAsync();
+                        logger.LogInformation("Order {OrderId} marked as Shipped.", evt.OrderId);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to process order-shipped event: {Json}", json);
+            }
+        };
+
+        await channel.BasicConsumeAsync("order-shipped", autoAck: true, consumer: consumer,
+            cancellationToken: stoppingToken);
+        logger.LogInformation("Orders is listening for 'order-shipped' events.");
+        await Task.Delay(Timeout.Infinite, stoppingToken);
+    }
+}
+
+public record OrderShipped(Guid OrderId);
 
 // Health check that verifies the message broker is reachable.
 public class RabbitMqHealthCheck(IConfiguration config) : IHealthCheck

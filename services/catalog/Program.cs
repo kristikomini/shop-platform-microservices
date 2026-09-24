@@ -26,8 +26,13 @@ app.MapScalarApiReference(o => o.WithTitle("Catalog API"));
 // Health probe used by Docker Compose and the gateway to gate readiness.
 app.MapHealthChecks("/health");
 
-app.MapGet("/products", async (CatalogDb db) =>
-    await db.Products.OrderBy(p => p.Id).ToListAsync())
+app.MapGet("/products", async (string? search, CatalogDb db) =>
+{
+    var query = db.Products.AsQueryable();
+    if (!string.IsNullOrWhiteSpace(search))
+        query = query.Where(p => EF.Functions.ILike(p.Name, $"%{search}%"));
+    return await query.OrderBy(p => p.Id).ToListAsync();
+})
     .WithName("GetProducts").WithTags("Catalog");
 
 app.MapGet("/products/{id:int}", async (int id, CatalogDb db) =>
@@ -35,6 +40,31 @@ app.MapGet("/products/{id:int}", async (int id, CatalogDb db) =>
         ? Results.Ok(p)
         : Results.NotFound())
     .WithName("GetProduct").WithTags("Catalog");
+
+// Atomically reserve stock: decrement only if enough is available. The WHERE
+// guard + rows-affected check makes this safe under concurrent orders without
+// a read-modify-write race. Catalog owns stock — Orders asks it to reserve.
+app.MapPost("/products/{id:int}/reserve", async (int id, ReserveStock req, CatalogDb db) =>
+{
+    if (req.Quantity < 1)
+        return Results.BadRequest("Quantity must be at least 1.");
+
+    var affected = await db.Products
+        .Where(p => p.Id == id && p.Stock >= req.Quantity)
+        .ExecuteUpdateAsync(s => s.SetProperty(p => p.Stock, p => p.Stock - req.Quantity));
+
+    if (affected == 0)
+    {
+        var exists = await db.Products.AnyAsync(p => p.Id == id);
+        return exists
+            ? Results.Conflict($"Insufficient stock for product {id}.")
+            : Results.NotFound();
+    }
+
+    var product = await db.Products.AsNoTracking().FirstAsync(p => p.Id == id);
+    return Results.Ok(product);
+})
+    .WithName("ReserveStock").WithTags("Catalog");
 
 app.MapPost("/products", async (Product input, CatalogDb db) =>
 {
@@ -61,6 +91,8 @@ public class Product
     public decimal Price { get; set; }
     public int Stock { get; set; }
 }
+
+public record ReserveStock(int Quantity);
 
 public class CatalogDb(DbContextOptions<CatalogDb> options) : DbContext(options)
 {
