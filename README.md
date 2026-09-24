@@ -121,6 +121,11 @@ curl http://localhost:8080/orders/orders
 
 Beyond "it runs", the repo shows the patterns a reviewer looks for:
 
+- **Versioned schema via EF Core migrations** — the schema lives in source
+  control under each service's `Migrations/`, and every service applies pending
+  migrations on startup (`db.Database.MigrateAsync()`). A design-time
+  `IDesignTimeDbContextFactory` lets `dotnet ef` build the context without
+  running app startup.
 - **Health checks** — each service exposes `/health` that verifies its real
   dependencies (Catalog → its database; Orders → its database *and* RabbitMQ).
   Docker Compose gates startup on them: databases and the broker must report

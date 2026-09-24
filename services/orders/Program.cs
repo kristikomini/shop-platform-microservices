@@ -230,7 +230,7 @@ public static class OrdersDbInitializer
         {
             try
             {
-                await db.Database.EnsureCreatedAsync();
+                await db.Database.MigrateAsync();
                 logger.LogInformation("Orders database ready.");
                 return;
             }
