@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, inject, signal } from '@angular/core';
+import { Component, OnInit, OnDestroy, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpErrorResponse } from '@angular/common/http';
@@ -29,7 +29,17 @@ export class App implements OnInit, OnDestroy {
   npPrice = signal<number | null>(null);
   npStock = signal<number | null>(null);
 
+  // Auth state
+  username = signal<string | null>(null);
+  role = signal<string | null>(null);
+  loginUsername = signal('');
+  loginPassword = signal('');
+  loggingIn = signal(false);
+  isLoggedIn = computed(() => this.username() !== null);
+  isAdmin = computed(() => this.role() === 'Admin');
+
   ngOnInit(): void {
+    this.restoreSession();
     this.loadProducts();
     this.loadOrders();
     // Poll orders so status transitions (Placed -> Shipped) appear live.
@@ -38,6 +48,53 @@ export class App implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     if (this.pollHandle) clearInterval(this.pollHandle);
+  }
+
+  private restoreSession(): void {
+    try {
+      const u = localStorage.getItem('username');
+      const r = localStorage.getItem('role');
+      if (u && localStorage.getItem('token')) {
+        this.username.set(u);
+        this.role.set(r);
+      }
+    } catch { /* private mode / blocked storage */ }
+  }
+
+  login(): void {
+    const u = this.loginUsername().trim();
+    const p = this.loginPassword();
+    if (!u || !p) { this.showToast('Enter username and password', false); return; }
+    this.loggingIn.set(true);
+    this.api.login(u, p).subscribe({
+      next: (res) => {
+        try {
+          localStorage.setItem('token', res.token);
+          localStorage.setItem('username', res.username);
+          localStorage.setItem('role', res.role);
+        } catch { /* ignore */ }
+        this.username.set(res.username);
+        this.role.set(res.role);
+        this.loginPassword.set('');
+        this.loggingIn.set(false);
+        this.showToast(`Signed in as ${res.username}`, true);
+      },
+      error: () => {
+        this.loggingIn.set(false);
+        this.showToast('Invalid username or password', false);
+      }
+    });
+  }
+
+  logout(): void {
+    try {
+      localStorage.removeItem('token');
+      localStorage.removeItem('username');
+      localStorage.removeItem('role');
+    } catch { /* ignore */ }
+    this.username.set(null);
+    this.role.set(null);
+    this.showToast('Signed out', true);
   }
 
   loadProducts(): void {
@@ -93,7 +150,9 @@ export class App implements OnInit, OnDestroy {
         this.loadProducts(); // reflect the decremented stock
       },
       error: (err: HttpErrorResponse) => {
-        const msg = typeof err.error === 'string' && err.error ? err.error : 'Order failed';
+        const msg = err.status === 401
+          ? 'Please sign in to place an order.'
+          : (typeof err.error === 'string' && err.error ? err.error : 'Order failed');
         this.showToast(msg, false);
         this.placing.set(null);
         this.loadProducts(); // stock may have changed elsewhere
@@ -119,8 +178,11 @@ export class App implements OnInit, OnDestroy {
         this.creating.set(false);
         this.loadProducts();
       },
-      error: () => {
-        this.showToast('Could not add product', false);
+      error: (err: HttpErrorResponse) => {
+        const msg = err.status === 401 ? 'Please sign in as an admin.'
+          : err.status === 403 ? 'Admin role required to add products.'
+          : 'Could not add product';
+        this.showToast(msg, false);
         this.creating.set(false);
       }
     });

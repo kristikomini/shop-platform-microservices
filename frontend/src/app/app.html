@@ -19,6 +19,22 @@
         <span class="node evt">Shipping</span>
       </div>
     </div>
+    <div class="authbar">
+      @if (isLoggedIn()) {
+        <span class="who">Signed in as <strong>{{ username() }}</strong>
+          <span class="rolebadge">{{ role() }}</span></span>
+        <button class="ghost" (click)="logout()">Sign out</button>
+      } @else {
+        <form class="loginform" (ngSubmit)="login()">
+          <input type="text" placeholder="username" autocomplete="username"
+                 [ngModel]="loginUsername()" (ngModelChange)="loginUsername.set($event)" name="loginUsername" />
+          <input type="password" placeholder="password" autocomplete="current-password"
+                 [ngModel]="loginPassword()" (ngModelChange)="loginPassword.set($event)" name="loginPassword" />
+          <button type="submit" [disabled]="loggingIn()">{{ loggingIn() ? 'Signing in…' : 'Sign in' }}</button>
+          <span class="hint">demo: admin / admin123 · customer / customer123</span>
+        </form>
+      }
+    </div>
   </header>
 
   <main class="grid">
@@ -29,16 +45,18 @@
         <span class="tag">GET /catalog/products</span>
       </div>
 
-      <!-- Add product -->
-      <form class="newprod" (ngSubmit)="addProduct()">
-        <input type="text" placeholder="New product name"
-               [ngModel]="npName()" (ngModelChange)="npName.set($event)" name="npName" />
-        <input type="number" min="0" step="0.01" placeholder="Price"
-               [ngModel]="npPrice()" (ngModelChange)="npPrice.set($event)" name="npPrice" />
-        <input type="number" min="0" placeholder="Stock"
-               [ngModel]="npStock()" (ngModelChange)="npStock.set($event)" name="npStock" />
-        <button type="submit" [disabled]="creating()">{{ creating() ? 'Adding…' : 'Add' }}</button>
-      </form>
+      <!-- Add product (admins only) -->
+      @if (isAdmin()) {
+        <form class="newprod" (ngSubmit)="addProduct()">
+          <input type="text" placeholder="New product name"
+                 [ngModel]="npName()" (ngModelChange)="npName.set($event)" name="npName" />
+          <input type="number" min="0" step="0.01" placeholder="Price"
+                 [ngModel]="npPrice()" (ngModelChange)="npPrice.set($event)" name="npPrice" />
+          <input type="number" min="0" placeholder="Stock"
+                 [ngModel]="npStock()" (ngModelChange)="npStock.set($event)" name="npStock" />
+          <button type="submit" [disabled]="creating()">{{ creating() ? 'Adding…' : 'Add' }}</button>
+        </form>
+      }
 
       <!-- Search -->
       <input class="search" type="search" placeholder="Search products…"

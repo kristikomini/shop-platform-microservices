@@ -16,12 +16,26 @@ services:
         condition: service_healthy
       orders:
         condition: service_healthy
+      auth:
+        condition: service_healthy
       frontend:
         condition: service_started
 
   # ---- Angular SPA, served by nginx, behind the gateway ------------------
   frontend:
     build: ./frontend        # no host port: reachable only via the gateway
+
+  # ---- Auth service: issues JWTs on login --------------------------------
+  auth:
+    build: ./services/auth
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4317"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
 
   # ---- Catalog service + its private database ----------------------------
   catalog:
