@@ -15,6 +15,7 @@ public class OrderFactoryTests
         Assert.Equal("Mechanical Keyboard", order.ProductName);
         Assert.Equal(89.90m, order.UnitPrice);
         Assert.Equal(3, order.Quantity);
+        Assert.Equal("Placed", order.Status);
     }
 
     [Fact]

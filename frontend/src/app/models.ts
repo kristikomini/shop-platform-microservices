@@ -13,6 +13,13 @@ export interface Order {
   quantity: number;
   total: number;
   placedAt: string;
+  status: string;
+}
+
+export interface NewProduct {
+  name: string;
+  price: number;
+  stock: number;
 }
 
 export interface CreateOrder {

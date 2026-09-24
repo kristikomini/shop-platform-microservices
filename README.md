@@ -23,13 +23,15 @@ Polly · xUnit + Testcontainers · GitHub Actions.
                       │ Catalog svc   │  │ Orders svc    │
                       │  + catalog-db │  │  + orders-db  │
                       └───────┬───────┘  └───────┬───────┘
-                              │ GET /products/{id}│  (sync HTTP: "is this product real?")
+                              │ POST /reserve     │  (sync HTTP: atomically reserve stock)
                               └────────◀──────────┘
                                                  │ publishes "order-placed"
                                                  ▼
                                            ┌──────────┐      ┌──────────────┐
-                                           │ RabbitMQ │ ───▶ │ Shipping svc │ (async consumer)
-                                           └──────────┘      └──────────────┘
+                                           │ RabbitMQ │ ───▶ │ Shipping svc │
+                                           └──────────┘      └──────┬───────┘
+                    "order-shipped"  ◀───────────────────────────────┘
+                    (Orders consumes it and advances the order to "Shipped")
 ```
 
 The whole app lives on **one public port (8080)**: the browser loads the Angular
@@ -71,10 +73,14 @@ UI loads, lists the catalog, and lets you place orders.
 
 ## Try it — the UI
 
-Open **http://localhost:8080**. Click **Order** on any product. The new order
-appears in the Orders panel, and the **shipping** container logs a
-`📦 Preparing shipment...` line — proving the async path end-to-end (Orders
-never called Shipping directly).
+Open **http://localhost:8080**. You can:
+- **Order** a product — its stock drops, the order appears as **Placed**, then
+  flips to **Shipped** a couple of seconds later (watch it change live).
+- Try to order more than the available stock — it's **rejected** with a message.
+- **Add** a product with the form, or **search** the catalog by name.
+
+The **shipping** container logs `📦 Preparing shipment...` then `🚚 shipped`,
+proving the event path end-to-end (Orders never called Shipping directly).
 
 ## Try it — the API directly
 
@@ -96,6 +102,20 @@ curl http://localhost:8080/orders/orders
 - RabbitMQ management UI: **http://localhost:15672** (guest / guest)
 - API docs (Scalar / OpenAPI): **http://localhost:8080/catalog/scalar/v1** and
   **http://localhost:8080/orders/scalar/v1**
+
+## Domain features
+
+- **Stock management with atomic reservation.** Placing an order asks Catalog to
+  `POST /products/{id}/reserve`, which decrements stock **only if enough is
+  available** (`WHERE stock >= qty` + rows-affected check — race-safe under
+  concurrent orders). If not, Catalog returns **409** and the order is rejected
+  before anything is persisted. Catalog owns stock; Orders never writes it.
+- **Event-driven order lifecycle.** A new order starts as **Placed**. Shipping
+  consumes `order-placed`, prepares the parcel, and emits `order-shipped`; Orders
+  consumes *that* and advances the order to **Shipped** — so the lifecycle is
+  driven entirely by events, and the UI reflects the change live (it polls).
+- **Product management + search.** The UI can add products and search the catalog
+  by name (`GET /products?search=...`, case-insensitive on the server).
 
 ## Production-minded engineering
 

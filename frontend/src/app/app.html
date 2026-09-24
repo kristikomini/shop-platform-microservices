@@ -29,10 +29,25 @@
         <span class="tag">GET /catalog/products</span>
       </div>
 
+      <!-- Add product -->
+      <form class="newprod" (ngSubmit)="addProduct()">
+        <input type="text" placeholder="New product name"
+               [ngModel]="npName()" (ngModelChange)="npName.set($event)" name="npName" />
+        <input type="number" min="0" step="0.01" placeholder="Price"
+               [ngModel]="npPrice()" (ngModelChange)="npPrice.set($event)" name="npPrice" />
+        <input type="number" min="0" placeholder="Stock"
+               [ngModel]="npStock()" (ngModelChange)="npStock.set($event)" name="npStock" />
+        <button type="submit" [disabled]="creating()">{{ creating() ? 'Adding…' : 'Add' }}</button>
+      </form>
+
+      <!-- Search -->
+      <input class="search" type="search" placeholder="Search products…"
+             [value]="search()" (input)="onSearch($any($event.target).value)" />
+
       @if (loadingProducts()) {
         <p class="muted">Loading products…</p>
       } @else if (products().length === 0) {
-        <p class="muted">No products.</p>
+        <p class="muted">No products match.</p>
       } @else {
         <div class="cards">
           @for (p of products(); track p.id) {
@@ -40,13 +55,15 @@
               <div class="card-body">
                 <h3>{{ p.name }}</h3>
                 <p class="price">{{ p.price | currency:'EUR' }}</p>
-                <p class="stock">{{ p.stock }} in stock</p>
+                <p class="stock" [class.out]="p.stock === 0">
+                  {{ p.stock === 0 ? 'Out of stock' : p.stock + ' in stock' }}
+                </p>
               </div>
               <div class="card-actions">
-                <input
-                  type="number" min="1" [value]="qty()[p.id]"
-                  (input)="setQty(p.id, $any($event.target).value)" />
-                <button (click)="order(p)" [disabled]="placing() === p.id">
+                <input type="number" min="1" [value]="qty()[p.id]"
+                       (input)="setQty(p.id, $any($event.target).value)"
+                       [disabled]="p.stock === 0" />
+                <button (click)="order(p)" [disabled]="placing() === p.id || p.stock === 0">
                   {{ placing() === p.id ? 'Placing…' : 'Order' }}
                 </button>
               </div>
@@ -74,6 +91,11 @@
               <div class="order-main">
                 <span class="qty">{{ o.quantity }}×</span>
                 <span class="name">{{ o.productName }}</span>
+                <span class="status"
+                      [class.placed]="o.status === 'Placed'"
+                      [class.shipped]="o.status === 'Shipped'">
+                  {{ o.status }}
+                </span>
               </div>
               <div class="order-meta">
                 <span class="total">{{ o.total | currency:'EUR' }}</span>

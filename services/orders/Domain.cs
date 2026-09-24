@@ -14,7 +14,8 @@ public static class OrderFactory
             ProductName = product.Name,
             UnitPrice = product.Price,
             Quantity = quantity,
-            PlacedAt = placedAtUtc
+            PlacedAt = placedAtUtc,
+            Status = "Placed"
         };
     }
 }
