@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -12,6 +14,16 @@ builder.Services.AddDbContext<CatalogDb>(o =>
 builder.Services.AddOpenApi();
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<CatalogDb>("catalog-db");
+
+// Distributed tracing. "Npgsql" is Npgsql's built-in ActivitySource, so we get
+// database spans without an extra instrumentation package.
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(r => r.AddService("catalog"))
+    .WithTracing(t => t
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddSource("Npgsql")
+        .AddOtlpExporter());
 
 var app = builder.Build();
 

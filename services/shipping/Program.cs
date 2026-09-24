@@ -1,10 +1,22 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddHostedService<ShippingWorker>();
+
+// Distributed tracing: emit spans for the messages we consume and publish,
+// linked (via the message headers) into the trace that started the order.
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(r => r.AddService("shipping"))
+    .WithTracing(t => t
+        .AddSource(Telemetry.MessagingSourceName)
+        .AddOtlpExporter());
+
 var host = builder.Build();
 host.Run();
 
@@ -50,6 +62,11 @@ public class ShippingWorker(IConfiguration config, ILogger<ShippingWorker> logge
         var consumer = new AsyncEventingBasicConsumer(channel);
         consumer.ReceivedAsync += async (_, ea) =>
         {
+            // Continue the trace that produced this event.
+            var parentContext = Telemetry.Extract(ea.BasicProperties);
+            using var activity = Telemetry.Messaging.StartActivity(
+                "process order-placed", ActivityKind.Consumer, parentContext);
+
             var json = Encoding.UTF8.GetString(ea.Body.ToArray());
             try
             {
@@ -63,11 +80,13 @@ public class ShippingWorker(IConfiguration config, ILogger<ShippingWorker> logge
                 // Simulate the physical work of preparing the parcel...
                 await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
 
-                // ...then announce it shipped so Orders can advance the status.
+                // ...then announce it shipped, propagating the trace context.
+                var props = new BasicProperties { Headers = new Dictionary<string, object?>() };
+                Telemetry.Inject(activity?.Context ?? parentContext, props.Headers!);
                 var shipped = Encoding.UTF8.GetBytes(
                     JsonSerializer.Serialize(new OrderShipped(order.Id)));
                 await channel.BasicPublishAsync(exchange: "", routingKey: "order-shipped",
-                    body: shipped, cancellationToken: stoppingToken);
+                    mandatory: false, basicProperties: props, body: shipped, cancellationToken: stoppingToken);
 
                 logger.LogInformation("🚚 Order {OrderId} shipped.", order.Id);
             }
