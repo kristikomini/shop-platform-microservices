@@ -1,0 +1,73 @@
+# Full microservices platform: gateway + 2 HTTP services + 1 worker,
+# each business service with its OWN database, plus a RabbitMQ broker.
+# Run everything with:  docker compose up --build
+services:
+
+  # ---- Public entry point ------------------------------------------------
+  gateway:
+    build: ./gateway
+    ports:
+      - "8080:8080"          # the ONLY port exposed to the host
+    depends_on:
+      - catalog
+      - orders
+      - frontend
+
+  # ---- Angular SPA, served by nginx, behind the gateway ------------------
+  frontend:
+    build: ./frontend        # no host port: reachable only via the gateway
+
+  # ---- Catalog service + its private database ----------------------------
+  catalog:
+    build: ./services/catalog
+    environment:
+      ConnectionStrings__CatalogDb: "Host=catalog-db;Database=catalog;Username=app;Password=pass"
+    depends_on:
+      - catalog-db
+
+  catalog-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: catalog
+    volumes:
+      - catalog-data:/var/lib/postgresql/data
+
+  # ---- Orders service + its SEPARATE database ----------------------------
+  orders:
+    build: ./services/orders
+    environment:
+      ConnectionStrings__OrdersDb: "Host=orders-db;Database=orders;Username=app;Password=pass"
+      Services__Catalog: "http://catalog:8080"   # find Catalog by service name
+      RabbitMq__Host: "rabbitmq"
+    depends_on:
+      - orders-db
+      - rabbitmq
+
+  orders-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: orders
+    volumes:
+      - orders-data:/var/lib/postgresql/data
+
+  # ---- Shipping worker: no API, no DB, only consumes events --------------
+  shipping:
+    build: ./services/shipping
+    environment:
+      RabbitMq__Host: "rabbitmq"
+    depends_on:
+      - rabbitmq
+
+  # ---- Message broker ----------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "15672:15672"        # management UI at http://localhost:15672 (guest/guest)
+
+volumes:
+  catalog-data:
+  orders-data:

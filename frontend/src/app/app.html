@@ -1,0 +1,92 @@
+<div class="page">
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="brand">
+        <span class="logo">◆</span>
+        <div>
+          <h1>Shop Platform</h1>
+          <p>Angular SPA · one gateway · independent services</p>
+        </div>
+      </div>
+      <div class="flow">
+        <span class="node">Browser</span>
+        <span class="arrow">→</span>
+        <span class="node gw">Gateway</span>
+        <span class="arrow">→</span>
+        <span class="node svc">Catalog</span>
+        <span class="node svc">Orders</span>
+        <span class="arrow">⇢</span>
+        <span class="node evt">Shipping</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="grid">
+    <!-- Catalog panel -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Catalog</h2>
+        <span class="tag">GET /catalog/products</span>
+      </div>
+
+      @if (loadingProducts()) {
+        <p class="muted">Loading products…</p>
+      } @else if (products().length === 0) {
+        <p class="muted">No products.</p>
+      } @else {
+        <div class="cards">
+          @for (p of products(); track p.id) {
+            <article class="card">
+              <div class="card-body">
+                <h3>{{ p.name }}</h3>
+                <p class="price">{{ p.price | currency:'EUR' }}</p>
+                <p class="stock">{{ p.stock }} in stock</p>
+              </div>
+              <div class="card-actions">
+                <input
+                  type="number" min="1" [value]="qty()[p.id]"
+                  (input)="setQty(p.id, $any($event.target).value)" />
+                <button (click)="order(p)" [disabled]="placing() === p.id">
+                  {{ placing() === p.id ? 'Placing…' : 'Order' }}
+                </button>
+              </div>
+            </article>
+          }
+        </div>
+      }
+    </section>
+
+    <!-- Orders panel -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Orders</h2>
+        <span class="tag">GET /orders/orders</span>
+      </div>
+
+      @if (loadingOrders()) {
+        <p class="muted">Loading orders…</p>
+      } @else if (orders().length === 0) {
+        <p class="muted">No orders yet — place one from the catalog.</p>
+      } @else {
+        <ul class="orders">
+          @for (o of orders(); track o.id) {
+            <li class="order">
+              <div class="order-main">
+                <span class="qty">{{ o.quantity }}×</span>
+                <span class="name">{{ o.productName }}</span>
+              </div>
+              <div class="order-meta">
+                <span class="total">{{ o.total | currency:'EUR' }}</span>
+                <span class="when">{{ o.placedAt | date:'short' }}</span>
+              </div>
+            </li>
+          }
+        </ul>
+      }
+    </section>
+  </main>
+
+  @if (toast(); as t) {
+    <div class="toast" [class.ok]="t.ok" [class.err]="!t.ok">{{ t.text }}</div>
+  }
+</div>
