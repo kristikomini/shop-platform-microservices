@@ -26,6 +26,11 @@ builder.Services.AddSingleton<EventBus>();
 // by events, not by Orders polling anyone.
 builder.Services.AddHostedService<OrderShippedConsumer>();
 
+// The OUTBOX dispatcher: reads unpublished outbox rows and pushes them to
+// RabbitMQ. Events are written to the outbox in the same transaction as the
+// order, so we never lose an event or publish one for an order that rolled back.
+builder.Services.AddHostedService<OutboxDispatcher>();
+
 // OpenAPI + health checks (database reachable AND broker reachable).
 builder.Services.AddOpenApi();
 builder.Services.AddHealthChecks()
@@ -48,7 +53,6 @@ app.MapPost("/orders", async (
     CreateOrder cmd,
     OrdersDb db,
     IHttpClientFactory http,
-    EventBus bus,
     ILogger<Program> logger) =>
 {
     if (cmd.Quantity < 1)
@@ -73,12 +77,15 @@ app.MapPost("/orders", async (
         return Results.BadRequest("Invalid product response");
 
     var order = OrderFactory.Create(Guid.NewGuid(), product, cmd.Quantity, DateTime.UtcNow);
+
+    // --- OUTBOX: persist the order AND the event in ONE transaction. ---
+    // We do NOT publish to RabbitMQ here; the OutboxDispatcher does that from
+    // the committed row, so the event and the order can never disagree.
     db.Orders.Add(order);
+    db.Outbox.Add(OutboxMessage.Create("order-placed", order));
     await db.SaveChangesAsync();
 
-    // --- ASYNCHRONOUS communication: announce the event, don't wait for anyone ---
-    await bus.PublishAsync("order-placed", order);
-    logger.LogInformation("Order {OrderId} placed and event published.", order.Id);
+    logger.LogInformation("Order {OrderId} placed (event queued in outbox).", order.Id);
 
     return Results.Created($"/orders/{order.Id}", order);
 })
@@ -106,27 +113,99 @@ public class Order
 public class OrdersDb(DbContextOptions<OrdersDb> options) : DbContext(options)
 {
     public DbSet<Order> Orders => Set<Order>();
+    public DbSet<OutboxMessage> Outbox => Set<OutboxMessage>();
 
     protected override void OnModelCreating(ModelBuilder b) =>
         b.Entity<Order>().Ignore(o => o.Total); // computed, not stored
 }
 
-// Thin wrapper over RabbitMQ. In a bigger system this would live in a shared
-// contracts library so every service serializes events the same way.
-public class EventBus(IConfiguration config, ILogger<EventBus> logger)
+// A pending domain event, written in the SAME transaction as the state change
+// it describes. The dispatcher publishes it and stamps ProcessedAt.
+public class OutboxMessage
+{
+    public Guid Id { get; set; }
+    public string Type { get; set; } = "";
+    public string Payload { get; set; } = "";
+    public DateTime OccurredAt { get; set; }
+    public DateTime? ProcessedAt { get; set; }
+    public int Attempts { get; set; }
+
+    public static OutboxMessage Create(string type, object payload) => new()
+    {
+        Id = Guid.NewGuid(),
+        Type = type,
+        Payload = JsonSerializer.Serialize(payload),
+        OccurredAt = DateTime.UtcNow
+    };
+}
+
+// Thin wrapper over RabbitMQ. Publishes an already-serialized payload (the JSON
+// stored in the outbox), so the dispatcher doesn't re-serialize.
+public class EventBus(IConfiguration config)
 {
     private readonly string _host = config["RabbitMq:Host"] ?? "rabbitmq";
 
-    public async Task PublishAsync<T>(string queue, T message)
+    public async Task PublishRawAsync(string queue, string json, CancellationToken ct = default)
     {
         var factory = new ConnectionFactory { HostName = _host };
-        await using var conn = await factory.CreateConnectionAsync();
-        await using var channel = await conn.CreateChannelAsync();
-        await channel.QueueDeclareAsync(queue, durable: true, exclusive: false, autoDelete: false);
+        await using var conn = await factory.CreateConnectionAsync(ct);
+        await using var channel = await conn.CreateChannelAsync(cancellationToken: ct);
+        await channel.QueueDeclareAsync(queue, durable: true, exclusive: false, autoDelete: false,
+            cancellationToken: ct);
 
-        var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
-        await channel.BasicPublishAsync(exchange: "", routingKey: queue, body: body);
-        logger.LogInformation("Published event to queue '{Queue}'.", queue);
+        var body = Encoding.UTF8.GetBytes(json);
+        await channel.BasicPublishAsync(exchange: "", routingKey: queue, body: body, cancellationToken: ct);
+    }
+}
+
+// Polls the outbox and publishes unprocessed messages, stamping ProcessedAt on
+// success and counting Attempts on failure (at-least-once delivery).
+public class OutboxDispatcher(
+    IServiceProvider services,
+    EventBus bus,
+    ILogger<OutboxDispatcher> logger) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                using var scope = services.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<OrdersDb>();
+
+                var pending = await db.Outbox
+                    .Where(m => m.ProcessedAt == null)
+                    .OrderBy(m => m.OccurredAt)
+                    .Take(20)
+                    .ToListAsync(stoppingToken);
+
+                foreach (var msg in pending)
+                {
+                    try
+                    {
+                        await bus.PublishRawAsync(msg.Type, msg.Payload, stoppingToken);
+                        msg.ProcessedAt = DateTime.UtcNow;
+                        logger.LogInformation("Dispatched outbox message {Id} ({Type}).", msg.Id, msg.Type);
+                    }
+                    catch (Exception ex)
+                    {
+                        msg.Attempts++;
+                        logger.LogWarning(ex, "Failed to dispatch outbox message {Id} (attempt {Attempts}).",
+                            msg.Id, msg.Attempts);
+                    }
+                }
+
+                if (pending.Count > 0)
+                    await db.SaveChangesAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Outbox dispatch loop error.");
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
+        }
     }
 }
 

@@ -25,7 +25,7 @@ Polly · xUnit + Testcontainers · GitHub Actions.
                       └───────┬───────┘  └───────┬───────┘
                               │ POST /reserve     │  (sync HTTP: atomically reserve stock)
                               └────────◀──────────┘
-                                                 │ publishes "order-placed"
+                                                 │ outbox → dispatcher → "order-placed"
                                                  ▼
                                            ┌──────────┐      ┌──────────────┐
                                            │ RabbitMQ │ ───▶ │ Shipping svc │
@@ -121,6 +121,12 @@ curl http://localhost:8080/orders/orders
 
 Beyond "it runs", the repo shows the patterns a reviewer looks for:
 
+- **Transactional outbox** — Orders writes the `order-placed` event into an
+  `Outbox` table in the **same transaction** as the order, then a background
+  `OutboxDispatcher` publishes unsent rows to RabbitMQ and stamps them processed.
+  This removes the dual-write race: the event is published **iff** the order was
+  committed (at-least-once delivery), instead of "save, then hope the publish
+  also succeeds."
 - **Versioned schema via EF Core migrations** — the schema lives in source
   control under each service's `Migrations/`, and every service applies pending
   migrations on startup (`db.Database.MigrateAsync()`). A design-time
@@ -160,6 +166,6 @@ exactly this. Docker Compose is the intended way to run the whole platform.
 - **Clean, layered .NET** with minimal APIs, EF Core, typed HTTP clients, and a
   background worker
 
-Next steps a reviewer might expect: a shared contracts library for events, an
-outbox pattern for reliable publishing, distributed tracing (OpenTelemetry), and
-per-service authentication at the gateway.
+Next steps a reviewer might expect: a shared contracts library for events,
+distributed tracing (OpenTelemetry), and per-service authentication at the
+gateway.
