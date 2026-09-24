@@ -3,6 +3,9 @@
     <Project Path="gateway/Gateway.csproj" />
   </Folder>
   <Folder Name="/services/" />
+  <Folder Name="/services/auth/">
+    <Project Path="services/auth/Auth.csproj" />
+  </Folder>
   <Folder Name="/services/catalog/">
     <Project Path="services/catalog/Catalog.csproj" />
   </Folder>

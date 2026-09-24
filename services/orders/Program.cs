@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.IdentityModel.Tokens;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -58,6 +60,22 @@ builder.Services.AddOpenTelemetry()
         .AddMeter(OrderMetrics.MeterName)   // custom business counters
         .AddPrometheusExporter());
 
+// JWT bearer authentication (tokens issued by the auth service). Reads stay
+// public; placing an order requires an authenticated user.
+var jwt = builder.Configuration.GetSection("Jwt");
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(o => o.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidIssuer = jwt["Issuer"],
+        ValidateAudience = true,
+        ValidAudience = jwt["Audience"],
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt["Key"]!)),
+        ValidateLifetime = true
+    });
+builder.Services.AddAuthorization();
+
 var app = builder.Build();
 
 await OrdersDbInitializer.InitializeAsync(app.Services, app.Logger);
@@ -66,6 +84,9 @@ app.MapOpenApi();
 app.MapScalarApiReference(o => o.WithTitle("Orders API"));
 app.MapHealthChecks("/health");
 app.MapPrometheusScrapingEndpoint();   // /metrics for Prometheus
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapGet("/orders", async (OrdersDb db) =>
     await db.Orders.OrderByDescending(o => o.PlacedAt).ToListAsync())
@@ -127,6 +148,7 @@ app.MapPost("/orders", async (
 
     return Results.Created($"/orders/{order.Id}", order);
 })
+    .RequireAuthorization()
     .WithName("PlaceOrder").WithTags("Orders");
 
 app.Run();

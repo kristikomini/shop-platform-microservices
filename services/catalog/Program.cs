@@ -1,4 +1,7 @@
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -30,6 +33,22 @@ builder.Services.AddOpenTelemetry()
         .AddRuntimeInstrumentation()
         .AddPrometheusExporter());   // exposes /metrics for Prometheus to scrape
 
+// JWT bearer authentication (tokens issued by the auth service). Reads stay
+// public; creating a product requires the Admin role.
+var jwt = builder.Configuration.GetSection("Jwt");
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(o => o.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidIssuer = jwt["Issuer"],
+        ValidateAudience = true,
+        ValidAudience = jwt["Audience"],
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt["Key"]!)),
+        ValidateLifetime = true
+    });
+builder.Services.AddAuthorization(o => o.AddPolicy("admin", p => p.RequireRole("Admin")));
+
 var app = builder.Build();
 
 // Create the schema and seed demo data on startup, retrying until the DB
@@ -45,6 +64,9 @@ app.MapHealthChecks("/health");
 
 // Prometheus scrape endpoint at /metrics.
 app.MapPrometheusScrapingEndpoint();
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapGet("/products", async (string? search, CatalogDb db) =>
 {
@@ -98,6 +120,7 @@ app.MapPost("/products", async (Product input, CatalogDb db) =>
     await db.SaveChangesAsync();
     return Results.Created($"/products/{product.Id}", product);
 })
+    .RequireAuthorization("admin")
     .WithName("CreateProduct").WithTags("Catalog");
 
 app.Run();

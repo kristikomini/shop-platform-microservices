@@ -11,3 +11,6 @@ scrape_configs:
   - job_name: shipping
     static_configs:
       - targets: ['shipping:8080']
+  - job_name: auth
+    static_configs:
+      - targets: ['auth:8080']

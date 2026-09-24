@@ -8,9 +8,9 @@ gateway**, **synchronous** service-to-service HTTP calls, and **asynchronous**
 event-driven messaging — with **health checks**, **resilience policies**,
 **OpenAPI docs**, and an **automated test suite** on top.
 
-**Stack:** .NET 10 · Angular 20 · PostgreSQL · RabbitMQ · YARP · Docker Compose ·
-Polly · OpenTelemetry + Jaeger · Prometheus + Grafana · xUnit + Testcontainers ·
-GitHub Actions.
+**Stack:** .NET 10 · Angular 20 · PostgreSQL · RabbitMQ · YARP · JWT auth ·
+Docker Compose · Polly · OpenTelemetry + Jaeger · Prometheus + Grafana ·
+xUnit + Testcontainers · GitHub Actions.
 
 ## Architecture
 
@@ -44,10 +44,11 @@ same origin — so the gateway routes them to the services with **no CORS**.
 | Component      | Type              | Owns        | Talks via                          |
 |----------------|-------------------|-------------|------------------------------------|
 | **frontend**   | Angular 20 + nginx| —           | HTTP, all via the gateway          |
-| **gateway**    | YARP proxy        | —           | serves SPA at `/`, routes `/catalog/*` & `/orders/*` |
-| **catalog**    | Minimal API       | `catalog-db`| HTTP                               |
-| **orders**     | Minimal API       | `orders-db` | HTTP (calls catalog) + RabbitMQ    |
+| **gateway**    | YARP proxy        | —           | serves SPA at `/`, routes `/catalog/*`, `/orders/*`, `/auth/*` |
+| **catalog**    | Minimal API       | `catalog-db`| HTTP (JWT-protected writes)        |
+| **orders**     | Minimal API       | `orders-db` | HTTP (calls catalog) + RabbitMQ (JWT-protected writes) |
 | **shipping**   | Worker (no API)   | —           | RabbitMQ (consumes events)         |
+| **auth**       | Minimal API       | —           | issues JWTs on login               |
 
 ### Two principles that make this "microservices"
 
@@ -64,7 +65,7 @@ same origin — so the gateway routes them to the services with **no CORS**.
 Requires Docker Desktop.
 
 ```bash
-cd "C:\Users\krsit\Desktop\E-commerce"
+cd shop-platform-microservices   # the repo root
 docker compose up --build
 ```
 
@@ -78,7 +79,10 @@ Open **http://localhost:8080**. You can:
 - **Order** a product — its stock drops, the order appears as **Placed**, then
   flips to **Shipped** a couple of seconds later (watch it change live).
 - Try to order more than the available stock — it's **rejected** with a message.
-- **Add** a product with the form, or **search** the catalog by name.
+- **Sign in** (top-right) to place orders — browsing is public, but ordering
+  requires a signed-in user. Demo users: `admin / admin123` (can also add
+  products) and `customer / customer123`.
+- **Add** a product (admins only) with the form, or **search** the catalog by name.
 
 The **shipping** container logs `📦 Preparing shipment...` then `🚚 shipped`,
 proving the event path end-to-end (Orders never called Shipping directly).
@@ -134,6 +138,13 @@ Beyond "it runs", the repo shows the patterns a reviewer looks for:
   counters**: `orders_placed`, `orders_rejected{reason}`, `shipments_completed`).
   Prometheus scrapes them; a Grafana dashboard is **auto-provisioned** (datasource
   + dashboard JSON in the repo) so it works on first `up` with no manual setup.
+- **JWT authentication & authorization** — a dedicated `auth` service issues
+  signed JWTs on login (passwords stored as PBKDF2 salted hashes, verified in
+  constant time). Catalog and Orders validate the token on write endpoints;
+  placing an order requires any authenticated user, and creating a product
+  requires the **Admin** role (`RequireAuthorization("admin")`). Reads stay
+  public. The Angular app logs in, stores the token, and an HTTP interceptor
+  attaches it as a Bearer header, which the gateway forwards.
 - **Distributed tracing (OpenTelemetry → Jaeger)** — every service is
   auto-instrumented (ASP.NET Core, HttpClient, PostgreSQL) and exports OTLP to
   Jaeger, so a single order request shows as one trace across all services.
@@ -186,5 +197,5 @@ exactly this. Docker Compose is the intended way to run the whole platform.
   background worker
 
 Next steps a reviewer might expect: a shared contracts library for events,
-per-service authentication (JWT) at the gateway, and alerting rules on the
-Prometheus metrics.
+refresh tokens / an external identity provider (this uses short-lived HS256
+tokens with a demo key), and alerting rules on the Prometheus metrics.
