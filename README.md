@@ -9,7 +9,8 @@ event-driven messaging — with **health checks**, **resilience policies**,
 **OpenAPI docs**, and an **automated test suite** on top.
 
 **Stack:** .NET 10 · Angular 20 · PostgreSQL · RabbitMQ · YARP · Docker Compose ·
-Polly · OpenTelemetry + Jaeger · xUnit + Testcontainers · GitHub Actions.
+Polly · OpenTelemetry + Jaeger · Prometheus + Grafana · xUnit + Testcontainers ·
+GitHub Actions.
 
 ## Architecture
 
@@ -105,6 +106,10 @@ curl http://localhost:8080/orders/orders
 - Distributed traces (Jaeger UI): **http://localhost:16686** — place an order,
   then open the `gateway` service to see one trace span gateway → orders →
   catalog *and* the async RabbitMQ hops into shipping and back.
+- Metrics dashboard (Grafana): **http://localhost:3000** — the "Shop Platform"
+  dashboard (orders placed/rejected, shipments, request rate, p95 latency,
+  memory). Anonymous viewing is enabled; place some orders to see it move.
+- Raw metrics (Prometheus): **http://localhost:9090**
 
 ## Domain features
 
@@ -124,6 +129,11 @@ curl http://localhost:8080/orders/orders
 
 Beyond "it runs", the repo shows the patterns a reviewer looks for:
 
+- **Metrics + dashboards (OpenTelemetry → Prometheus → Grafana)** — every
+  service exposes `/metrics` (HTTP server, runtime/GC, and **custom business
+  counters**: `orders_placed`, `orders_rejected{reason}`, `shipments_completed`).
+  Prometheus scrapes them; a Grafana dashboard is **auto-provisioned** (datasource
+  + dashboard JSON in the repo) so it works on first `up` with no manual setup.
 - **Distributed tracing (OpenTelemetry → Jaeger)** — every service is
   auto-instrumented (ASP.NET Core, HttpClient, PostgreSQL) and exports OTLP to
   Jaeger, so a single order request shows as one trace across all services.
@@ -176,5 +186,5 @@ exactly this. Docker Compose is the intended way to run the whole platform.
   background worker
 
 Next steps a reviewer might expect: a shared contracts library for events,
-metrics + dashboards (Prometheus/Grafana), and per-service authentication at the
-gateway.
+per-service authentication (JWT) at the gateway, and alerting rules on the
+Prometheus metrics.

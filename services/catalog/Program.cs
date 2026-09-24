@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Scalar.AspNetCore;
@@ -23,7 +24,11 @@ builder.Services.AddOpenTelemetry()
         .AddAspNetCoreInstrumentation()
         .AddHttpClientInstrumentation()
         .AddSource("Npgsql")
-        .AddOtlpExporter());
+        .AddOtlpExporter())
+    .WithMetrics(m => m
+        .AddAspNetCoreInstrumentation()
+        .AddRuntimeInstrumentation()
+        .AddPrometheusExporter());   // exposes /metrics for Prometheus to scrape
 
 var app = builder.Build();
 
@@ -37,6 +42,9 @@ app.MapScalarApiReference(o => o.WithTitle("Catalog API"));
 
 // Health probe used by Docker Compose and the gateway to gate readiness.
 app.MapHealthChecks("/health");
+
+// Prometheus scrape endpoint at /metrics.
+app.MapPrometheusScrapingEndpoint();
 
 app.MapGet("/products", async (string? search, CatalogDb db) =>
 {
