@@ -1,0 +1,4 @@
+{
+  "/catalog": { "target": "http://localhost:8080", "secure": false },
+  "/orders":  { "target": "http://localhost:8080", "secure": false }
+}
