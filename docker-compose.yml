@@ -9,6 +9,8 @@ services:
     build: ./gateway
     ports:
       - "8080:8080"          # the ONLY port exposed to the host
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4317"
     depends_on:
       catalog:
         condition: service_healthy
@@ -26,6 +28,7 @@ services:
     build: ./services/catalog
     environment:
       ConnectionStrings__CatalogDb: "Host=catalog-db;Database=catalog;Username=app;Password=pass"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4317"
     depends_on:
       catalog-db:
         condition: service_healthy
@@ -57,6 +60,7 @@ services:
       ConnectionStrings__OrdersDb: "Host=orders-db;Database=orders;Username=app;Password=pass"
       Services__Catalog: "http://catalog:8080"   # find Catalog by service name
       RabbitMq__Host: "rabbitmq"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4317"
     depends_on:
       orders-db:
         condition: service_healthy
@@ -88,9 +92,18 @@ services:
     build: ./services/shipping
     environment:
       RabbitMq__Host: "rabbitmq"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4317"
     depends_on:
       rabbitmq:
         condition: service_healthy
+
+  # ---- Distributed tracing backend + UI ----------------------------------
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"        # Jaeger UI at http://localhost:16686
 
   # ---- Message broker ----------------------------------------------------
   rabbitmq:

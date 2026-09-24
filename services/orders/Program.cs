@@ -1,7 +1,10 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using Scalar.AspNetCore;
@@ -36,6 +39,17 @@ builder.Services.AddOpenApi();
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<OrdersDb>("orders-db")
     .AddCheck<RabbitMqHealthCheck>("rabbitmq");
+
+// Distributed tracing. "Shop.Messaging" is our custom source for the spans that
+// bridge the RabbitMQ hops (publish from the outbox, consume order-shipped).
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(r => r.AddService("orders"))
+    .WithTracing(t => t
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddSource("Npgsql")
+        .AddSource(Telemetry.MessagingSourceName)
+        .AddOtlpExporter());
 
 var app = builder.Build();
 
@@ -129,13 +143,17 @@ public class OutboxMessage
     public DateTime OccurredAt { get; set; }
     public DateTime? ProcessedAt { get; set; }
     public int Attempts { get; set; }
+    // W3C traceparent of the request that produced this event, so the eventual
+    // publish (which happens later, in the dispatcher) links to the same trace.
+    public string? TraceParent { get; set; }
 
     public static OutboxMessage Create(string type, object payload) => new()
     {
         Id = Guid.NewGuid(),
         Type = type,
         Payload = JsonSerializer.Serialize(payload),
-        OccurredAt = DateTime.UtcNow
+        OccurredAt = DateTime.UtcNow,
+        TraceParent = Activity.Current?.Id
     };
 }
 
@@ -145,7 +163,8 @@ public class EventBus(IConfiguration config)
 {
     private readonly string _host = config["RabbitMq:Host"] ?? "rabbitmq";
 
-    public async Task PublishRawAsync(string queue, string json, CancellationToken ct = default)
+    public async Task PublishRawAsync(string queue, string json,
+        ActivityContext traceContext = default, CancellationToken ct = default)
     {
         var factory = new ConnectionFactory { HostName = _host };
         await using var conn = await factory.CreateConnectionAsync(ct);
@@ -153,8 +172,12 @@ public class EventBus(IConfiguration config)
         await channel.QueueDeclareAsync(queue, durable: true, exclusive: false, autoDelete: false,
             cancellationToken: ct);
 
+        var props = new BasicProperties { Headers = new Dictionary<string, object?>() };
+        Telemetry.Inject(traceContext, props.Headers!);
+
         var body = Encoding.UTF8.GetBytes(json);
-        await channel.BasicPublishAsync(exchange: "", routingKey: queue, body: body, cancellationToken: ct);
+        await channel.BasicPublishAsync(exchange: "", routingKey: queue, mandatory: false,
+            basicProperties: props, body: body, cancellationToken: ct);
     }
 }
 
@@ -184,7 +207,14 @@ public class OutboxDispatcher(
                 {
                     try
                     {
-                        await bus.PublishRawAsync(msg.Type, msg.Payload, stoppingToken);
+                        // Re-attach to the trace that created this event so the
+                        // publish span is a child of the original order request.
+                        ActivityContext.TryParse(msg.TraceParent, null, out var orderContext);
+                        using var activity = Telemetry.Messaging.StartActivity(
+                            $"publish {msg.Type}", ActivityKind.Producer, orderContext);
+
+                        await bus.PublishRawAsync(msg.Type, msg.Payload,
+                            activity?.Context ?? orderContext, stoppingToken);
                         msg.ProcessedAt = DateTime.UtcNow;
                         logger.LogInformation("Dispatched outbox message {Id} ({Type}).", msg.Id, msg.Type);
                     }
@@ -248,6 +278,10 @@ public class OrderShippedConsumer(
         var consumer = new AsyncEventingBasicConsumer(channel);
         consumer.ReceivedAsync += async (_, ea) =>
         {
+            var parentContext = Telemetry.Extract(ea.BasicProperties);
+            using var activity = Telemetry.Messaging.StartActivity(
+                "process order-shipped", ActivityKind.Consumer, parentContext);
+
             var json = Encoding.UTF8.GetString(ea.Body.ToArray());
             try
             {

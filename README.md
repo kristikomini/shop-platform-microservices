@@ -9,7 +9,7 @@ event-driven messaging — with **health checks**, **resilience policies**,
 **OpenAPI docs**, and an **automated test suite** on top.
 
 **Stack:** .NET 10 · Angular 20 · PostgreSQL · RabbitMQ · YARP · Docker Compose ·
-Polly · xUnit + Testcontainers · GitHub Actions.
+Polly · OpenTelemetry + Jaeger · xUnit + Testcontainers · GitHub Actions.
 
 ## Architecture
 
@@ -102,6 +102,9 @@ curl http://localhost:8080/orders/orders
 - RabbitMQ management UI: **http://localhost:15672** (guest / guest)
 - API docs (Scalar / OpenAPI): **http://localhost:8080/catalog/scalar/v1** and
   **http://localhost:8080/orders/scalar/v1**
+- Distributed traces (Jaeger UI): **http://localhost:16686** — place an order,
+  then open the `gateway` service to see one trace span gateway → orders →
+  catalog *and* the async RabbitMQ hops into shipping and back.
 
 ## Domain features
 
@@ -121,6 +124,12 @@ curl http://localhost:8080/orders/orders
 
 Beyond "it runs", the repo shows the patterns a reviewer looks for:
 
+- **Distributed tracing (OpenTelemetry → Jaeger)** — every service is
+  auto-instrumented (ASP.NET Core, HttpClient, PostgreSQL) and exports OTLP to
+  Jaeger, so a single order request shows as one trace across all services.
+  Trace context is also propagated **through RabbitMQ** (W3C `traceparent` in the
+  message headers, carried in the outbox row), so the async publish/consume hops
+  join the same trace — not just the synchronous HTTP calls.
 - **Transactional outbox** — Orders writes the `order-placed` event into an
   `Outbox` table in the **same transaction** as the order, then a background
   `OutboxDispatcher` publishes unsent rows to RabbitMQ and stamps them processed.
@@ -167,5 +176,5 @@ exactly this. Docker Compose is the intended way to run the whole platform.
   background worker
 
 Next steps a reviewer might expect: a shared contracts library for events,
-distributed tracing (OpenTelemetry), and per-service authentication at the
+metrics + dashboards (Prometheus/Grafana), and per-service authentication at the
 gateway.
