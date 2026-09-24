@@ -12,4 +12,8 @@
   <Folder Name="/services/shipping/">
     <Project Path="services/shipping/Shipping.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Catalog.Tests/Catalog.Tests.csproj" />
+    <Project Path="tests/Orders.Tests/Orders.Tests.csproj" />
+  </Folder>
 </Solution>

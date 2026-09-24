@@ -1,5 +1,6 @@
-# Full microservices platform: gateway + 2 HTTP services + 1 worker,
+# Full microservices platform: gateway + Angular SPA + 2 HTTP services + 1 worker,
 # each business service with its OWN database, plus a RabbitMQ broker.
+# Services start in dependency order and wait for real readiness via healthchecks.
 # Run everything with:  docker compose up --build
 services:
 
@@ -9,9 +10,12 @@ services:
     ports:
       - "8080:8080"          # the ONLY port exposed to the host
     depends_on:
-      - catalog
-      - orders
-      - frontend
+      catalog:
+        condition: service_healthy
+      orders:
+        condition: service_healthy
+      frontend:
+        condition: service_started
 
   # ---- Angular SPA, served by nginx, behind the gateway ------------------
   frontend:
@@ -23,7 +27,14 @@ services:
     environment:
       ConnectionStrings__CatalogDb: "Host=catalog-db;Database=catalog;Username=app;Password=pass"
     depends_on:
-      - catalog-db
+      catalog-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 40s
 
   catalog-db:
     image: postgres:16
@@ -33,6 +44,11 @@ services:
       POSTGRES_DB: catalog
     volumes:
       - catalog-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d catalog"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   # ---- Orders service + its SEPARATE database ----------------------------
   orders:
@@ -42,8 +58,16 @@ services:
       Services__Catalog: "http://catalog:8080"   # find Catalog by service name
       RabbitMq__Host: "rabbitmq"
     depends_on:
-      - orders-db
-      - rabbitmq
+      orders-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 40s
 
   orders-db:
     image: postgres:16
@@ -53,6 +77,11 @@ services:
       POSTGRES_DB: orders
     volumes:
       - orders-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d orders"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   # ---- Shipping worker: no API, no DB, only consumes events --------------
   shipping:
@@ -60,13 +89,19 @@ services:
     environment:
       RabbitMq__Host: "rabbitmq"
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
 
   # ---- Message broker ----------------------------------------------------
   rabbitmq:
     image: rabbitmq:3-management
     ports:
       - "15672:15672"        # management UI at http://localhost:15672 (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   catalog-data:
