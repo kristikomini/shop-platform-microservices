@@ -1,24 +1,34 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
-var builder = Host.CreateApplicationBuilder(args);
+// A minimal web host so the worker can also expose a Prometheus /metrics
+// endpoint (there is no other HTTP surface — the work is all event-driven).
+var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHostedService<ShippingWorker>();
 
-// Distributed tracing: emit spans for the messages we consume and publish,
-// linked (via the message headers) into the trace that started the order.
+// Tracing: spans for the messages we consume and publish, linked (via the
+// message headers) into the trace that started the order. Metrics: a shipments
+// counter plus runtime metrics, exposed for Prometheus to scrape.
 builder.Services.AddOpenTelemetry()
     .ConfigureResource(r => r.AddService("shipping"))
     .WithTracing(t => t
         .AddSource(Telemetry.MessagingSourceName)
-        .AddOtlpExporter());
+        .AddOtlpExporter())
+    .WithMetrics(m => m
+        .AddMeter(ShippingMetrics.MeterName)
+        .AddRuntimeInstrumentation()
+        .AddPrometheusExporter());
 
-var host = builder.Build();
-host.Run();
+var app = builder.Build();
+app.MapPrometheusScrapingEndpoint();   // /metrics
+app.MapGet("/health", () => Results.Ok("healthy"));
+app.Run();
 
 // This service has NO HTTP API and NO shared database. It only reacts to events.
 // Orders doesn't know Shipping exists — that decoupling is the point of messaging.
@@ -88,6 +98,7 @@ public class ShippingWorker(IConfiguration config, ILogger<ShippingWorker> logge
                 await channel.BasicPublishAsync(exchange: "", routingKey: "order-shipped",
                     mandatory: false, basicProperties: props, body: shipped, cancellationToken: stoppingToken);
 
+                ShippingMetrics.Shipped.Add(1);
                 logger.LogInformation("🚚 Order {OrderId} shipped.", order.Id);
             }
             catch (Exception ex)

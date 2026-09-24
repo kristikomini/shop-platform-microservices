@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using RabbitMQ.Client;
@@ -49,7 +50,13 @@ builder.Services.AddOpenTelemetry()
         .AddHttpClientInstrumentation()
         .AddSource("Npgsql")
         .AddSource(Telemetry.MessagingSourceName)
-        .AddOtlpExporter());
+        .AddOtlpExporter())
+    .WithMetrics(m => m
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddRuntimeInstrumentation()
+        .AddMeter(OrderMetrics.MeterName)   // custom business counters
+        .AddPrometheusExporter());
 
 var app = builder.Build();
 
@@ -58,6 +65,7 @@ await OrdersDbInitializer.InitializeAsync(app.Services, app.Logger);
 app.MapOpenApi();
 app.MapScalarApiReference(o => o.WithTitle("Orders API"));
 app.MapHealthChecks("/health");
+app.MapPrometheusScrapingEndpoint();   // /metrics for Prometheus
 
 app.MapGet("/orders", async (OrdersDb db) =>
     await db.Orders.OrderByDescending(o => o.PlacedAt).ToListAsync())
@@ -70,7 +78,10 @@ app.MapPost("/orders", async (
     ILogger<Program> logger) =>
 {
     if (cmd.Quantity < 1)
+    {
+        OrderMetrics.CountRejected("invalid_quantity");
         return Results.BadRequest("Quantity must be at least 1.");
+    }
 
     // --- SYNCHRONOUS communication: ask Catalog to RESERVE stock ---
     // Catalog owns stock, so Orders asks it to atomically decrement. A 409 means
@@ -80,15 +91,27 @@ app.MapPost("/orders", async (
         $"/products/{cmd.ProductId}/reserve", new { quantity = cmd.Quantity });
 
     if (reserve.StatusCode == System.Net.HttpStatusCode.Conflict)
+    {
+        OrderMetrics.CountRejected("insufficient_stock");
         return Results.BadRequest($"Insufficient stock for product {cmd.ProductId}.");
+    }
     if (reserve.StatusCode == System.Net.HttpStatusCode.NotFound)
+    {
+        OrderMetrics.CountRejected("unknown_product");
         return Results.BadRequest($"Unknown product {cmd.ProductId}.");
+    }
     if (!reserve.IsSuccessStatusCode)
+    {
+        OrderMetrics.CountRejected("reserve_failed");
         return Results.BadRequest("Could not reserve stock.");
+    }
 
     var product = await reserve.Content.ReadFromJsonAsync<ProductDto>();
     if (product is null)
+    {
+        OrderMetrics.CountRejected("reserve_failed");
         return Results.BadRequest("Invalid product response");
+    }
 
     var order = OrderFactory.Create(Guid.NewGuid(), product, cmd.Quantity, DateTime.UtcNow);
 
@@ -99,6 +122,7 @@ app.MapPost("/orders", async (
     db.Outbox.Add(OutboxMessage.Create("order-placed", order));
     await db.SaveChangesAsync();
 
+    OrderMetrics.Placed.Add(1);
     logger.LogInformation("Order {OrderId} placed (event queued in outbox).", order.Id);
 
     return Results.Created($"/orders/{order.Id}", order);
