@@ -138,6 +138,12 @@ Beyond "it runs", the repo shows the patterns a reviewer looks for:
   counters**: `orders_placed`, `orders_rejected{reason}`, `shipments_completed`).
   Prometheus scrapes them; a Grafana dashboard is **auto-provisioned** (datasource
   + dashboard JSON in the repo) so it works on first `up` with no manual setup.
+- **Shared event contracts** — the `order-placed` / `order-shipped` message
+  schemas live in a `Shop.Contracts` library referenced by both Orders and
+  Shipping, so the wire format has a single source of truth and is **decoupled
+  from each service's internal/EF model** (Orders maps its entity to the contract
+  before publishing). The Docker builds for those two services use the repo root
+  as context so the shared project is available.
 - **Rate limiting at the gateway** — a fixed-window limiter (per client IP,
   configurable, default 100 requests / 10s) rejects floods with **429** before
   they reach any service. A cross-cutting concern handled once, at the edge.

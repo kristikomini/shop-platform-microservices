@@ -28,4 +28,8 @@
     <PackageReference Include="Scalar.AspNetCore" Version="2.17.9" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\shared\Shop.Contracts\Shop.Contracts.csproj" />
+  </ItemGroup>
+
 </Project>

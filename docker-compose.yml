@@ -69,7 +69,9 @@ services:
 
   # ---- Orders service + its SEPARATE database ----------------------------
   orders:
-    build: ./services/orders
+    build:
+      context: .                              # repo root: needs shared/Shop.Contracts
+      dockerfile: services/orders/Dockerfile
     environment:
       ConnectionStrings__OrdersDb: "Host=orders-db;Database=orders;Username=app;Password=pass"
       Services__Catalog: "http://catalog:8080"   # find Catalog by service name
@@ -103,7 +105,9 @@ services:
 
   # ---- Shipping worker: no API, no DB, only consumes events --------------
   shipping:
-    build: ./services/shipping
+    build:
+      context: .                                # repo root: needs shared/Shop.Contracts
+      dockerfile: services/shipping/Dockerfile
     environment:
       RabbitMq__Host: "rabbitmq"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4317"
