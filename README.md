@@ -150,13 +150,16 @@ Beyond "it runs", the repo shows the patterns a reviewer looks for:
 - **Rate limiting at the gateway** — a fixed-window limiter (per client IP,
   configurable, default 100 requests / 10s) rejects floods with **429** before
   they reach any service. A cross-cutting concern handled once, at the edge.
-- **JWT authentication & authorization** — a dedicated `auth` service issues
-  signed JWTs on login (passwords stored as PBKDF2 salted hashes, verified in
-  constant time). Catalog and Orders validate the token on write endpoints;
-  placing an order requires any authenticated user, and creating a product
-  requires the **Admin** role (`RequireAuthorization("admin")`). Reads stay
-  public. The Angular app logs in, stores the token, and an HTTP interceptor
-  attaches it as a Bearer header, which the gateway forwards.
+- **JWT authentication & authorization** — a dedicated `auth` service issues a
+  short-lived **access token** (15 min) plus a **rotating refresh token** on
+  login (passwords stored as PBKDF2 salted hashes, verified in constant time).
+  `/auth/refresh` exchanges a refresh token for a fresh pair; refresh tokens are
+  **single-use** (consuming one rotates it), so a leaked one is quickly useless.
+  Catalog and Orders validate the access token on write endpoints; placing an
+  order requires any authenticated user, and creating a product requires the
+  **Admin** role (`RequireAuthorization("admin")`). Reads stay public. The
+  Angular app stores both tokens; an HTTP interceptor attaches the access token
+  and, on a 401, transparently refreshes and retries the request.
 - **Distributed tracing (OpenTelemetry → Jaeger)** — every service is
   auto-instrumented (ASP.NET Core, HttpClient, PostgreSQL) and exports OTLP to
   Jaeger, so a single order request shows as one trace across all services.
@@ -208,6 +211,6 @@ exactly this. Docker Compose is the intended way to run the whole platform.
 - **Clean, layered .NET** with minimal APIs, EF Core, typed HTTP clients, and a
   background worker
 
-Next steps a reviewer might expect: a shared contracts library for events,
-refresh tokens / an external identity provider (this uses short-lived HS256
-tokens with a demo key), and alerting rules on the Prometheus metrics.
+Next steps a reviewer might expect: an external identity provider (this uses
+HS256 tokens with a demo key and an in-memory refresh-token store), Alertmanager
+wired to the alert rules, and Kubernetes manifests / a Helm chart.

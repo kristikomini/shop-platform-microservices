@@ -70,6 +70,7 @@ export class App implements OnInit, OnDestroy {
       next: (res) => {
         try {
           localStorage.setItem('token', res.token);
+          localStorage.setItem('refreshToken', res.refreshToken);
           localStorage.setItem('username', res.username);
           localStorage.setItem('role', res.role);
         } catch { /* ignore */ }
@@ -89,6 +90,7 @@ export class App implements OnInit, OnDestroy {
   logout(): void {
     try {
       localStorage.removeItem('token');
+      localStorage.removeItem('refreshToken');
       localStorage.removeItem('username');
       localStorage.removeItem('role');
     } catch { /* ignore */ }

@@ -33,8 +33,13 @@ export class ApiService {
     return this.http.post<Order>('/orders/orders', cmd);
   }
 
-  // -> gateway -> Auth service (returns a signed JWT)
+  // -> gateway -> Auth service (returns access + refresh tokens)
   login(username: string, password: string): Observable<LoginResponse> {
     return this.http.post<LoginResponse>('/auth/login', { username, password });
+  }
+
+  // -> gateway -> Auth service (exchange a refresh token for a fresh pair)
+  refresh(refreshToken: string): Observable<LoginResponse> {
+    return this.http.post<LoginResponse>('/auth/refresh', { refreshToken });
   }
 }
