@@ -138,6 +138,9 @@ Beyond "it runs", the repo shows the patterns a reviewer looks for:
   counters**: `orders_placed`, `orders_rejected{reason}`, `shipments_completed`).
   Prometheus scrapes them; a Grafana dashboard is **auto-provisioned** (datasource
   + dashboard JSON in the repo) so it works on first `up` with no manual setup.
+- **Rate limiting at the gateway** — a fixed-window limiter (per client IP,
+  configurable, default 100 requests / 10s) rejects floods with **429** before
+  they reach any service. A cross-cutting concern handled once, at the edge.
 - **JWT authentication & authorization** — a dedicated `auth` service issues
   signed JWTs on login (passwords stored as PBKDF2 salted hashes, verified in
   constant time). Catalog and Orders validate the token on write endpoints;
