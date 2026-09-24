@@ -110,7 +110,7 @@ public static class DbInitializer
         {
             try
             {
-                await db.Database.EnsureCreatedAsync();
+                await db.Database.MigrateAsync();
                 if (!await db.Products.AnyAsync())
                 {
                     db.Products.AddRange(
