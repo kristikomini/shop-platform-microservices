@@ -3,6 +3,7 @@ bin/
 obj/
 *.user
 .vs/
+TestResults/
 
 # Angular / Node
 frontend/node_modules/

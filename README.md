@@ -1,9 +1,15 @@
 # Shop Platform — Microservices Example (.NET 10)
 
+[![CI](https://github.com/kristikomini/shop-platform-microservices/actions/workflows/ci.yml/badge.svg)](https://github.com/kristikomini/shop-platform-microservices/actions/workflows/ci.yml)
+
 A minimal but realistic microservices e-commerce platform, built to demonstrate
 the core patterns interviewers ask about: **service-per-database**, an **API
 gateway**, **synchronous** service-to-service HTTP calls, and **asynchronous**
-event-driven messaging.
+event-driven messaging — with **health checks**, **resilience policies**,
+**OpenAPI docs**, and an **automated test suite** on top.
+
+**Stack:** .NET 10 · Angular 20 · PostgreSQL · RabbitMQ · YARP · Docker Compose ·
+Polly · xUnit + Testcontainers · GitHub Actions.
 
 ## Architecture
 
@@ -88,6 +94,29 @@ curl http://localhost:8080/orders/orders
 ```
 
 - RabbitMQ management UI: **http://localhost:15672** (guest / guest)
+- API docs (Scalar / OpenAPI): **http://localhost:8080/catalog/scalar/v1** and
+  **http://localhost:8080/orders/scalar/v1**
+
+## Production-minded engineering
+
+Beyond "it runs", the repo shows the patterns a reviewer looks for:
+
+- **Health checks** — each service exposes `/health` that verifies its real
+  dependencies (Catalog → its database; Orders → its database *and* RabbitMQ).
+  Docker Compose gates startup on them: databases and the broker must report
+  **healthy** before the services start, and the services before the gateway
+  (`depends_on: condition: service_healthy`).
+- **Resilience** — the Orders→Catalog HTTP client uses
+  `AddStandardResilienceHandler()` (Polly): retries, a circuit breaker, and
+  timeouts, so a transient Catalog blip doesn't instantly fail an order.
+- **OpenAPI docs** — every service publishes an OpenAPI document with an
+  interactive Scalar UI.
+- **Automated tests** (`dotnet test`):
+  - *Unit* — pure domain logic (`OrderFactory`) with no I/O.
+  - *Integration* — the Catalog service booted via `WebApplicationFactory`
+    against a **real PostgreSQL** spun up by **Testcontainers**.
+- **CI** — GitHub Actions builds and tests the .NET solution and builds the
+  Angular app on every push (badge above).
 
 ## Run without Docker (for local dev)
 
@@ -99,12 +128,13 @@ exactly this. Docker Compose is the intended way to run the whole platform.
 
 - **Bounded contexts + service-per-database** (the hardest part to get right)
 - **API gateway** as a single entry point for cross-cutting concerns
-- **Resilient startup** — services retry their DB / broker connections because
-  containers boot in parallel
 - **Both communication styles** and *when* to use each
+- **Failure-aware** — health checks, resilience policies, and health-gated
+  startup ordering
+- **Tested** — unit + integration tests (Testcontainers) running in CI
 - **Clean, layered .NET** with minimal APIs, EF Core, typed HTTP clients, and a
   background worker
 
-Next steps a reviewer might expect: health-check-based `depends_on`, a shared
-contracts library for events, an outbox pattern for reliable publishing, and
+Next steps a reviewer might expect: a shared contracts library for events, an
+outbox pattern for reliable publishing, distributed tracing (OpenTelemetry), and
 per-service authentication at the gateway.

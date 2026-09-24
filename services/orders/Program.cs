@@ -1,7 +1,9 @@
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using RabbitMQ.Client;
+using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -10,21 +12,31 @@ builder.Services.AddDbContext<OrdersDb>(o =>
     o.UseNpgsql(builder.Configuration.GetConnectionString("OrdersDb")));
 
 // Typed HTTP client pointed at the Catalog SERVICE (by DNS name, set in compose).
-// Orders asks Catalog over the network — it never touches Catalog's database.
+// AddStandardResilienceHandler adds retries, a circuit breaker and timeouts
+// (Polly under the hood) — so a Catalog blip doesn't immediately fail an order.
 builder.Services.AddHttpClient("catalog", c =>
-    c.BaseAddress = new Uri(builder.Configuration["Services:Catalog"]!));
+    c.BaseAddress = new Uri(builder.Configuration["Services:Catalog"]!))
+    .AddStandardResilienceHandler();
 
-// Publishes domain events to RabbitMQ so other services can react asynchronously.
 builder.Services.AddSingleton<EventBus>();
+
+// OpenAPI + health checks (database reachable AND broker reachable).
+builder.Services.AddOpenApi();
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<OrdersDb>("orders-db")
+    .AddCheck<RabbitMqHealthCheck>("rabbitmq");
 
 var app = builder.Build();
 
 await OrdersDbInitializer.InitializeAsync(app.Services, app.Logger);
 
-app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "orders" }));
+app.MapOpenApi();
+app.MapScalarApiReference(o => o.WithTitle("Orders API"));
+app.MapHealthChecks("/health");
 
 app.MapGet("/orders", async (OrdersDb db) =>
-    await db.Orders.OrderByDescending(o => o.PlacedAt).ToListAsync());
+    await db.Orders.OrderByDescending(o => o.PlacedAt).ToListAsync())
+    .WithName("GetOrders").WithTags("Orders");
 
 app.MapPost("/orders", async (
     CreateOrder cmd,
@@ -33,6 +45,9 @@ app.MapPost("/orders", async (
     EventBus bus,
     ILogger<Program> logger) =>
 {
+    if (cmd.Quantity < 1)
+        return Results.BadRequest("Quantity must be at least 1.");
+
     // --- SYNCHRONOUS communication: verify the product with Catalog ---
     var catalog = http.CreateClient("catalog");
     var response = await catalog.GetAsync($"/products/{cmd.ProductId}");
@@ -43,15 +58,7 @@ app.MapPost("/orders", async (
     if (product is null)
         return Results.BadRequest("Invalid product response");
 
-    var order = new Order
-    {
-        Id = Guid.NewGuid(),
-        ProductId = product.Id,
-        ProductName = product.Name,
-        UnitPrice = product.Price,
-        Quantity = cmd.Quantity,
-        PlacedAt = DateTime.UtcNow
-    };
+    var order = OrderFactory.Create(Guid.NewGuid(), product, cmd.Quantity, DateTime.UtcNow);
     db.Orders.Add(order);
     await db.SaveChangesAsync();
 
@@ -60,7 +67,8 @@ app.MapPost("/orders", async (
     logger.LogInformation("Order {OrderId} placed and event published.", order.Id);
 
     return Results.Created($"/orders/{order.Id}", order);
-});
+})
+    .WithName("PlaceOrder").WithTags("Orders");
 
 app.Run();
 
@@ -107,6 +115,25 @@ public class EventBus(IConfiguration config, ILogger<EventBus> logger)
     }
 }
 
+// Health check that verifies the message broker is reachable.
+public class RabbitMqHealthCheck(IConfiguration config) : IHealthCheck
+{
+    public async Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context, CancellationToken ct = default)
+    {
+        try
+        {
+            var factory = new ConnectionFactory { HostName = config["RabbitMq:Host"] ?? "rabbitmq" };
+            await using var conn = await factory.CreateConnectionAsync(ct);
+            return HealthCheckResult.Healthy();
+        }
+        catch (Exception ex)
+        {
+            return HealthCheckResult.Unhealthy("RabbitMQ unreachable", ex);
+        }
+    }
+}
+
 public static class OrdersDbInitializer
 {
     public static async Task InitializeAsync(IServiceProvider services, ILogger logger)
@@ -130,3 +157,6 @@ public static class OrdersDbInitializer
         throw new Exception("Orders database did not become available in time.");
     }
 }
+
+// Exposed so a test project could boot the app via WebApplicationFactory.
+public partial class Program { }
